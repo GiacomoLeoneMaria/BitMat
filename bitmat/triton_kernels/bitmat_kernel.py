@@ -92,6 +92,42 @@ def _ternary_mm_kernel(
 
 
 
+def bitmat(a, b, int_per_2_bits=4, activation=""):
+    """
+        a: int8 tensor (M, K)
+        b: int8 packed tensor (K // int_per_2_bit, N)
+        n_bits: int, number of bits that each element in b represents
+    """
+    # Check constraints.
+    assert a.shape[1] == b.shape[0] * int_per_2_bits, "Incompatible dimensions"
+    assert a.dim() == 2, "Matrix A must be 2D"
+    assert b.dim() == 2, "Matrix B must be 2D"
+    assert a.is_contiguous(), "A must be contiguous"
+    assert b.is_contiguous(), "B must be contiguous"
+    assert int_per_2_bits in [4, 8, 16, 32], "n_bits must be 4, 8, 16, 32"
+    M, K = a.shape
+    _, N = b.shape
+
+    # Allocates output.
+    c = torch.empty((M, N), device=a.device, dtype=torch.float16).contiguous()
+    # 1D launch kernel where each block gets its own program.
+    grid = lambda META: (
+        triton.cdiv(M, META['BLOCK_SIZE_M']) * triton.cdiv(N, META['BLOCK_SIZE_N']),
+    )
+
+    # print(f"Launching kernel with M = {M}, N = {N}, K = {K}, n_bits = {n_bits}, activation = {activation}")
+
+    _ternary_mm_kernel[grid](
+        a, b, c,
+        M, N, K,
+        int_per_2_bits,
+        a.stride(0), a.stride(1),
+        b.stride(0), b.stride(1),
+        c.stride(0), c.stride(1),
+        ACTIVATION=activation
+    )
+    return c
+
 
 @triton.autotune(
     configs=[
@@ -173,9 +209,9 @@ def _ternary_bmm_kernel(
     for k in range(0, tl.cdiv(K, BLOCK_SIZE_K)):
         # Load the next block of A and B, generate a mask by checking the K dimension.
         # If it is out of bounds, set it to 0.
-        a = tl.load(a_ptrs, mask=offs_k[None, :] < K - k * BLOCK_SIZE_K, other=0.0)
+        a = tl.load(a_ptrs, mask=offs_k[None, :] < K - k * BLOCK_SIZE_K + BLOCK_SIZE_K - 1, other=0.0)
         # b = tl.load(b_ptrs, mask=offs_k[:, None] < K - k * BLOCK_SIZE_K, other=0)
-        b = tl.load(b_ptrs)
+        b = tl.load(b_ptrs, mask=offs_k[:, None] < K - k * BLOCK_SIZE_K, other=0)
 
         # Convert B from int to a.dtype, for each bit in B, 0 becomes -1.0, 1 becomes 1.0
         # b: (BLOCK_SIZE_K, BLOCK_SIZE_N)

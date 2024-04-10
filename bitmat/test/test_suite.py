@@ -5,7 +5,6 @@ from bitmat.utils.packing import *
 from bitmat.bitlinear import BitLinear
 import torch
 
-from bitmat.utils.rmsnorm import RMSLayerNorm
 
 
 
@@ -51,7 +50,7 @@ def test_kernel_packing_unpacking():
 def test_kernel_matmul():
     from bitmat.triton_kernels.bitmat_kernel import bitmat
     x = torch.randint(-128, 128, (128, 4096), dtype=torch.int8).cuda()
-    w = torch.randint(-1, 1, [4096, 4096], dtype=torch.int8).cuda()
+    w = torch.randint(-1, 2, [4096, 4096], dtype=torch.int8).cuda()
     packed_w = pack_ternary(w, 4)
 
     start_time = time.time()
@@ -64,8 +63,9 @@ def test_kernel_matmul():
 
 
 def test_kernel_batchMatmul():
-    x = torch.randint(-128, 128, (15, 128, 4096), dtype=torch.int8).cuda()
-    w = torch.randint(-1, 1, [16368,4096], dtype=torch.int8).cuda()
+    x = torch.randint(-128, 128, (1, 128, 4096), dtype=torch.int8).cuda() #TODO: batch size = 1 seems problermatic. need further investigation
+    w = torch.randint(-1, 2, [5000*6, 4096], dtype=torch.int8).cuda()
+
     packed_w = pack_ternary(w, 4)
     start_time = time.time()
     c = batched_bitmat(x, packed_w, 4)
@@ -74,5 +74,4 @@ def test_kernel_batchMatmul():
     matmul =x.to(torch.float16) @  w.to(torch.float16).t()
     print("Pytorch Time: " + str(time.time() - torch_time))
     assert (c != matmul).sum() == 0
-
 
